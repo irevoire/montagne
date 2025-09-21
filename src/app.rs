@@ -74,25 +74,35 @@ impl eframe::App for App {
                     .shape(MarkerShape::Cross)
                     .radius(10.0);
                 let line = Line::new("mem_heap_b", points);
-                Plot::new("my_plot").view_aspect(2.0).show(ui, |plot_ui| {
-                    if plot_ui.response().clicked_by(PointerButton::Primary)
-                        && let Some(pos) = plot_ui.pointer_coordinate()
-                    {
-                        let (pos, _snap) = self
-                            .snapshots
-                            .iter()
-                            .enumerate()
-                            .filter(|snap| !matches!(snap.1.heap_tree, HeapTree::Empty))
-                            .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
-                            .unwrap();
-                        if self.snapshots[pos].heap_tree != HeapTree::Empty {
-                            self.opened_snapshots.push(pos);
+                Plot::new("my_plot")
+                    .x_axis_label("i")
+                    .y_axis_formatter(|mark, _range| {
+                        if mark.value.is_sign_positive() {
+                            bity::byte::format(mark.value as u64)
+                        } else {
+                            format!("-{}", bity::byte::format((-mark.value) as u64))
                         }
-                    }
-                    plot_ui.line(line);
-                    plot_ui.points(peaks);
-                    plot_ui.points(detailed);
-                });
+                    })
+                    .view_aspect(2.0)
+                    .show(ui, |plot_ui| {
+                        if plot_ui.response().clicked_by(PointerButton::Primary)
+                            && let Some(pos) = plot_ui.pointer_coordinate()
+                        {
+                            let (pos, _snap) = self
+                                .snapshots
+                                .iter()
+                                .enumerate()
+                                .filter(|snap| !matches!(snap.1.heap_tree, HeapTree::Empty))
+                                .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
+                                .unwrap();
+                            if self.snapshots[pos].heap_tree != HeapTree::Empty {
+                                self.opened_snapshots.push(pos);
+                            }
+                        }
+                        plot_ui.line(line);
+                        plot_ui.points(peaks);
+                        plot_ui.points(detailed);
+                    });
             }
         });
         let mut remove_pos = Vec::new();
@@ -108,7 +118,13 @@ impl eframe::App for App {
                 .open(&mut opened)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.code(snap.heap_tree.unwrap());
+                        let mut stack_trace = snap.heap_tree.unwrap();
+                        log::info!("stack trace: `{stack_trace:?}`");
+                        let text_edit = egui::TextEdit::multiline(&mut stack_trace)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .interactive(true);
+                        ui.add(text_edit);
                     });
                 });
             if !opened {
@@ -191,8 +207,8 @@ impl Snapshot {
         assert_eq!(key, "heap_tree", "heap_tree");
         let heap_tree = match heap_tree {
             "empty" => HeapTree::Empty,
-            "peak" => HeapTree::Peak(lines.collect::<Vec<&str>>().join("")),
-            "detailed" => HeapTree::Detailed(lines.collect::<Vec<&str>>().join("")),
+            "peak" => HeapTree::Peak(lines.collect::<Vec<&str>>().join("\n")),
+            "detailed" => HeapTree::Detailed(lines.collect::<Vec<&str>>().join("\n")),
             other => panic!("Unknown heap tree type {other}"),
         };
 

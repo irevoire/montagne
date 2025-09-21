@@ -26,6 +26,7 @@ log = "0.4.27"
 serde = { version = "1.0.219", features = ["derive"] }
 egui_plot = "0.33.0"
 itertools = "0.14.0"
+bity = "0.1.4"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
