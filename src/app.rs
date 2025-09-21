@@ -1,4 +1,7 @@
-use egui::PointerButton;
+use egui::{
+    Align2, Color32, CornerRadius, FontFamily, PointerButton, Pos2, Rect, Sense, Stroke,
+    StrokeKind, Ui,
+};
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
 use itertools::Itertools;
 
@@ -118,13 +121,16 @@ impl eframe::App for App {
                 .open(&mut opened)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        let mut stack_trace = snap.heap_tree.unwrap();
-                        log::info!("stack trace: `{stack_trace:?}`");
-                        let text_edit = egui::TextEdit::multiline(&mut stack_trace)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .interactive(true);
-                        ui.add(text_edit);
+                        let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
+                        heap_node.paint(ui);
+
+                        // let mut stack_trace = snap.heap_tree.unwrap();
+                        // log::info!("stack trace: `{stack_trace:?}`");
+                        // let text_edit = egui::TextEdit::multiline(&mut stack_trace)
+                        //     .code_editor()
+                        //     .desired_width(f32::INFINITY)
+                        //     .interactive(true);
+                        // ui.add(text_edit);
                     });
                 });
             if !opened {
@@ -239,13 +245,19 @@ impl HeapTree {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct HeapNode<'a> {
     bytes: usize,
     addr: Option<usize>,
     name: &'a str,
     location: Option<&'a str>,
     children: Vec<HeapNode<'a>>,
+}
+
+struct DisplayStep<'a> {
+    base: Pos2,
+    width: f32,
+    node: &'a HeapNode<'a>,
 }
 
 impl<'a> HeapNode<'a> {
@@ -298,6 +310,85 @@ impl<'a> HeapNode<'a> {
             location,
             children,
         })
+    }
+
+    fn paint(&self, ui: &mut Ui) {
+        const HEIGHT: f32 = 8.0;
+
+        let (response, painter) =
+            ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
+        let rect = response.rect;
+
+        let mut explore = vec![DisplayStep {
+            base: rect.left_bottom(),
+            width: rect.width(),
+            node: self,
+        }];
+
+        while let Some(DisplayStep { base, width, node }) = explore.pop() {
+            painter.rect(
+                Rect {
+                    min: Pos2 {
+                        x: base.x,
+                        y: base.y - HEIGHT,
+                    },
+                    max: Pos2 {
+                        x: base.x + width,
+                        y: base.y,
+                    },
+                },
+                CornerRadius::same(0),
+                Color32::TRANSPARENT,
+                Stroke::new(1.0, Color32::BLACK),
+                StrokeKind::Middle,
+            );
+
+            let font = egui::FontId {
+                size: HEIGHT,
+                family: FontFamily::Monospace,
+            };
+            let mut display = format!("{} ({})", node.name, node.location.unwrap_or_default());
+            let galley = painter.layout_no_wrap(display.to_string(), font.clone(), Color32::BLACK);
+            let ends_at = galley.size().x;
+            if ends_at > width {
+                display = node.name.to_string();
+                let galley =
+                    painter.layout_no_wrap(display.to_string(), font.clone(), Color32::BLACK);
+                let ends_at = galley.size().x;
+                if ends_at > width {
+                    display = "".to_string();
+                }
+            }
+
+            if !display.is_empty() {
+                painter.text(
+                    Pos2 {
+                        x: base.x + HEIGHT / 2.0,
+                        y: base.y - HEIGHT / 2.0,
+                    },
+                    Align2::LEFT_CENTER,
+                    display,
+                    egui::FontId {
+                        size: HEIGHT,
+                        family: FontFamily::Monospace,
+                    },
+                    Color32::BLACK,
+                );
+            }
+            let mut current_x = base.x;
+            for child in node.children.iter() {
+                let child_width = ((child.bytes as f32) / (node.bytes as f32)) * width;
+                explore.push(DisplayStep {
+                    base: Pos2 {
+                        x: current_x,
+                        y: base.y - HEIGHT,
+                    },
+                    width: child_width,
+                    node: child,
+                });
+                current_x += child_width;
+            }
+        }
     }
 
     /// Calculate recursive number of children nodes.
