@@ -78,10 +78,12 @@ impl eframe::App for App {
                     if plot_ui.response().clicked_by(PointerButton::Primary)
                         && let Some(pos) = plot_ui.pointer_coordinate()
                     {
-                        let pos = self
+                        let (pos, _snap) = self
                             .snapshots
                             .iter()
-                            .position_min_by_key(|snap| snap.id.abs_diff(pos.x as usize))
+                            .enumerate()
+                            .filter(|snap| !matches!(snap.1.heap_tree, HeapTree::Empty))
+                            .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
                             .unwrap();
                         if self.snapshots[pos].heap_tree != HeapTree::Empty {
                             self.opened_snapshots.push(pos);
