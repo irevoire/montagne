@@ -238,3 +238,11 @@ impl HeapTree {
         }
     }
 }
+
+struct HeapNode<'a> {
+    bytes: usize,
+    addr: Option<usize>,
+    name: &'a str,
+    location: &'a str,
+    children: Vec<HeapNode<'a>>,
+}
