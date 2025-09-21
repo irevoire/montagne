@@ -239,10 +239,176 @@ impl HeapTree {
     }
 }
 
+#[derive(Debug)]
 struct HeapNode<'a> {
     bytes: usize,
     addr: Option<usize>,
     name: &'a str,
-    location: &'a str,
+    location: Option<&'a str>,
     children: Vec<HeapNode<'a>>,
+}
+
+impl<'a> HeapNode<'a> {
+    fn parse(lines: &mut impl Iterator<Item = &'a str>) -> Option<Self> {
+        let line = lines.next().expect("missing heap node line");
+
+        // Parse children count.
+        let (children_count, remaining) = line.split_once(": ").unwrap();
+        let children_count = children_count
+            .strip_prefix('n')
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+
+        // Special case for bellow threshold nodes.
+        if children_count == 0 && remaining.contains("all below massif's threshold") {
+            return None;
+        }
+
+        // Parse bytes.
+        let (bytes, remaining) = remaining.split_once(' ').unwrap();
+        let bytes = bytes.parse().unwrap();
+
+        // Parse memory address.
+        let (addr, name, location) = if remaining.starts_with("0x") {
+            let (addr, remaining) = remaining.split_once(": ").unwrap();
+            let (name, location) = remaining.rsplit_once(" (").unwrap();
+            (
+                Some(usize::from_str_radix(addr.trim_start_matches("0x"), 16).unwrap()),
+                name,
+                Some(location.trim_end_matches(')')),
+            )
+        } else {
+            assert_eq!(
+                remaining,
+                "(heap allocation functions) malloc/new/new[], --alloc-fns, etc."
+            );
+            (None, "malloc/new/new[], --alloc-fns, etc", None)
+        };
+
+        // Parse children.
+        let children = (0..children_count)
+            .filter_map(|_| Self::parse(lines))
+            .collect();
+
+        Some(Self {
+            bytes,
+            addr,
+            name,
+            location,
+            children,
+        })
+    }
+
+    /// Calculate recursive number of children nodes.
+    #[cfg(test)]
+    fn children_count(&self) -> usize {
+        self.children.len()
+            + self
+                .children
+                .iter()
+                .map(Self::children_count)
+                .sum::<usize>()
+    }
+
+    #[cfg(test)]
+    fn children_recursive(&self) -> Vec<&[Self]> {
+        let mut nodes_children = vec![&*self.children];
+        nodes_children.extend(self.children.iter().flat_map(Self::children_recursive));
+        nodes_children
+    }
+}
+
+impl<'a> TryFrom<&'a str> for HeapNode<'a> {
+    type Error = ();
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        Self::parse(&mut value.lines().map(str::trim)).ok_or(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::HeapNode;
+
+    #[test]
+    fn heap_node() {
+        let input = r###"
+n3: 1792 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n1: 1024 0x12FE91: alloc (alloc.rs:93)
+  n1: 1024 0x12FE91: alloc_impl (alloc.rs:188)
+   n1: 1024 0x12FE91: allocate (alloc.rs:249)
+    n1: 1024 0x12FE91: try_allocate_in<alloc::alloc::Global> (mod.rs:476)
+     n1: 1024 0x12FE91: with_capacity_in<alloc::alloc::Global> (mod.rs:422)
+      n1: 1024 0x12FE91: with_capacity_in<u8, alloc::alloc::Global> (mod.rs:190)
+       n1: 1024 0x12FE91: with_capacity_in<u8, alloc::alloc::Global> (mod.rs:815)
+        n1: 1024 0x12FE91: with_capacity<u8> (mod.rs:495)
+         n1: 1024 0x12FE91: with_capacity<std::io::stdio::StdoutRaw> (bufwriter.rs:122)
+          n1: 1024 0x12FE91: with_capacity<std::io::stdio::StdoutRaw> (linewriter.rs:110)
+           n1: 1024 0x12FE91: new<std::io::stdio::StdoutRaw> (linewriter.rs:90)
+            n1: 1024 0x12FE91: {closure#0} (stdio.rs:719)
+             n1: 1024 0x12FE91: {closure#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::io::stdio::stdout::{closure_env#0}> (once_lock.rs:310)
+              n1: 1024 0x12FE91: {closure#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::io::stdio::stdout::{closure_env#0}>, !> (once_lock.rs:518)
+               n1: 1024 0x12FE91: std::sync::poison::once::Once::call_once_force::{{closure}} (once.rs:214)
+                n1: 1024 0x10EAF3: std::sys::sync::once::futex::Once::call (futex.rs:176)
+                 n1: 1024 0x10E571: call_once_force<std::sync::once_lock::{impl#0}::initialize::{closure_env#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::io::stdio::stdout::{closure_env#0}>, !>> (once.rs:214)
+                  n1: 1024 0x10E571: std::sync::once_lock::OnceLock<T>::initialize (once_lock.rs:517)
+                   n1: 1024 0x12D633: get_or_try_init<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::sync::once_lock::{impl#0}::get_or_init::{closure_env#0}<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::io::stdio::stdout::{closure_env#0}>, !> (once_lock.rs:396)
+                    n1: 1024 0x12D633: get_or_init<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>, std::io::stdio::stdout::{closure_env#0}> (once_lock.rs:310)
+                     n1: 1024 0x12D633: stdout (stdio.rs:719)
+                      n1: 1024 0x12D633: print_to<std::io::stdio::Stdout> (stdio.rs:1164)
+                       n1: 1024 0x12D633: std::io::stdio::_print (stdio.rs:1275)
+                        n1: 1024 0x10FF7C: massif::main (main.rs:7)
+                         n1: 1024 0x110A8A: core::ops::function::FnOnce::call_once (function.rs:250)
+                          n1: 1024 0x1105CD: std::sys::backtrace::__rust_begin_short_backtrace (backtrace.rs:152)
+                           n1: 1024 0x110080: std::rt::lang_start::{{closure}} (rt.rs:199)
+                            n1: 1024 0x12B6B3: call_once<(), (dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (function.rs:284)
+                             n1: 1024 0x12B6B3: do_call<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panicking.rs:589)
+                              n1: 1024 0x12B6B3: try<i32, &(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (panicking.rs:552)
+                               n1: 1024 0x12B6B3: catch_unwind<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panic.rs:359)
+                                n1: 1024 0x12B6B3: {closure#0} (rt.rs:168)
+                                 n1: 1024 0x12B6B3: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:589)
+                                  n1: 1024 0x12B6B3: try<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:552)
+                                   n1: 1024 0x12B6B3: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)
+                                    n1: 1024 0x12B6B3: std::rt::lang_start_internal (rt.rs:164)
+                                     n1: 1024 0x110066: std::rt::lang_start (rt.rs:198)
+                                      n0: 1024 0x10FFDD: main (in /home/ubuntu/benjamin/massif/target/debug/massif)
+ n1: 768 0x10E1C1: realloc (alloc.rs:133)
+  n1: 768 0x10E1C1: grow_impl (alloc.rs:221)
+   n1: 768 0x10E1C1: grow (alloc.rs:283)
+    n1: 768 0x10E1C1: alloc::raw_vec::finish_grow (mod.rs:781)
+     n1: 768 0x11BB60: grow_amortized<alloc::alloc::Global> (mod.rs:664)
+      n1: 768 0x11BB60: grow_one<alloc::alloc::Global> (mod.rs:571)
+       n1: 768 0x11BB60: alloc::raw_vec::RawVec<T,A>::grow_one (mod.rs:340)
+        n1: 768 0x11033E: alloc::vec::Vec<T,A>::push (mod.rs:2448)
+         n1: 768 0x10FF59: massif::main (main.rs:6)
+          n1: 768 0x110A8A: core::ops::function::FnOnce::call_once (function.rs:250)
+           n1: 768 0x1105CD: std::sys::backtrace::__rust_begin_short_backtrace (backtrace.rs:152)
+            n1: 768 0x110080: std::rt::lang_start::{{closure}} (rt.rs:199)
+             n1: 768 0x12B6B3: call_once<(), (dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (function.rs:284)
+              n1: 768 0x12B6B3: do_call<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panicking.rs:589)
+               n1: 768 0x12B6B3: try<i32, &(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (panicking.rs:552)
+                n1: 768 0x12B6B3: catch_unwind<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panic.rs:359)
+                 n1: 768 0x12B6B3: {closure#0} (rt.rs:168)
+                  n1: 768 0x12B6B3: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:589)
+                   n1: 768 0x12B6B3: try<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:552)
+                    n1: 768 0x12B6B3: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)
+                     n1: 768 0x12B6B3: std::rt::lang_start_internal (rt.rs:164)
+                      n1: 768 0x110066: std::rt::lang_start (rt.rs:198)
+                       n0: 768 0x10FFDD: main (in /home/ubuntu/benjamin/massif/target/debug/massif)
+ n0: 0 in 9 places, all below massif's threshold (1.00%)
+        "###.trim();
+
+        let root = HeapNode::try_from(input).unwrap();
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(1 + root.children_count(), 62);
+        // Verify that there is at most one child per node, except of the root node which has two.
+        assert_eq!(root.children.len(), 2);
+        assert!(root.children.iter().all(|direct_children| {
+            direct_children
+                .children_recursive()
+                .into_iter()
+                .all(|children| children.len() <= 1)
+        }));
+    }
 }
