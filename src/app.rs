@@ -1,4 +1,4 @@
-use egui::{Color32, PointerButton};
+use egui::PointerButton;
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
 use itertools::Itertools;
 
