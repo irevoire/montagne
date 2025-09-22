@@ -1,6 +1,6 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontFamily, PointerButton, Pos2, Rect, Sense, Stroke,
-    StrokeKind, Ui,
+    Align2, Color32, CornerRadius, FontFamily, PointerButton, Pos2, Rect, Scene, Sense, Stroke,
+    StrokeKind, Ui, Vec2,
 };
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
 use itertools::Itertools;
@@ -12,7 +12,7 @@ const DELIM: &str = "#-----------\n";
 pub struct App {
     input: String,
     snapshots: Vec<Snapshot>,
-    opened_snapshots: Vec<usize>,
+    opened_snapshots: Vec<(usize, Rect)>,
     plot: bool,
 }
 
@@ -99,7 +99,7 @@ impl eframe::App for App {
                                 .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
                                 .unwrap();
                             if self.snapshots[pos].heap_tree != HeapTree::Empty {
-                                self.opened_snapshots.push(pos);
+                                self.opened_snapshots.push((pos, Rect::ZERO));
                             }
                         }
                         plot_ui.line(line);
@@ -109,7 +109,7 @@ impl eframe::App for App {
             }
         });
         let mut remove_pos = Vec::new();
-        for (pos, opened_snapshots) in self.opened_snapshots.iter().enumerate() {
+        for (pos, (opened_snapshots, scene_rect)) in self.opened_snapshots.iter_mut().enumerate() {
             let snap = &self.snapshots[*opened_snapshots];
             let suffix = if matches!(snap.heap_tree, HeapTree::Peak(_)) {
                 " (peak)"
@@ -122,15 +122,10 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
-                        heap_node.paint(ui);
-
-                        // let mut stack_trace = snap.heap_tree.unwrap();
-                        // log::info!("stack trace: `{stack_trace:?}`");
-                        // let text_edit = egui::TextEdit::multiline(&mut stack_trace)
-                        //     .code_editor()
-                        //     .desired_width(f32::INFINITY)
-                        //     .interactive(true);
-                        // ui.add(text_edit);
+                        let scene = Scene::new()
+                            .max_inner_size([1920.0, 1080.0])
+                            .zoom_range(0.1..=20.0);
+                        scene.show(ui, scene_rect, |ui| heap_node.paint(ui));
                     });
                 });
             if !opened {
@@ -313,7 +308,9 @@ impl<'a> HeapNode<'a> {
 
         let (response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
-        let rect = response.rect;
+        let mut rect = response.rect;
+        rect.min += Vec2::splat(1.0);
+        rect.max -= Vec2::splat(1.0);
 
         let mut explore = vec![DisplayStep {
             base: rect.left_bottom(),
@@ -333,14 +330,14 @@ impl<'a> HeapNode<'a> {
                         y: base.y,
                     },
                 },
-                CornerRadius::same(0),
+                CornerRadius::same(2),
                 Color32::TRANSPARENT,
                 Stroke::new(1.0, Color32::BLACK),
                 StrokeKind::Middle,
             );
 
             let font = egui::FontId {
-                size: HEIGHT,
+                size: HEIGHT - 1.0,
                 family: FontFamily::Monospace,
             };
             let mut display = format!("{} ({})", node.name, node.location.unwrap_or_default());
@@ -364,10 +361,7 @@ impl<'a> HeapNode<'a> {
                     },
                     Align2::LEFT_CENTER,
                     display,
-                    egui::FontId {
-                        size: HEIGHT,
-                        family: FontFamily::Monospace,
-                    },
+                    font,
                     Color32::BLACK,
                 );
             }
