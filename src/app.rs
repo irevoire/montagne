@@ -1,6 +1,7 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontFamily, PointerButton, Pos2, Rect, Scene, Sense, Stroke,
-    StrokeKind, Ui, Vec2,
+    Align2, Color32, CornerRadius, FontFamily, Layout, PointerButton, Pos2, Rect, Scene, Sense,
+    Stroke, StrokeKind, Ui, Vec2,
+    text::{LayoutJob, TextWrapping},
 };
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
 use itertools::Itertools;
@@ -311,6 +312,12 @@ impl<'a> HeapNode<'a> {
         let mut rect = response.rect;
         rect.min += Vec2::splat(1.0);
         rect.max -= Vec2::splat(1.0);
+        let font = egui::FontId {
+            size: HEIGHT - 1.0,
+            family: FontFamily::Monospace,
+        };
+        let galley = painter.layout_no_wrap("...".to_string(), font.clone(), Color32::BLACK);
+        let min_text_size_to_display = galley.size().x;
 
         let mut explore = vec![DisplayStep {
             base: rect.left_bottom(),
@@ -336,32 +343,19 @@ impl<'a> HeapNode<'a> {
                 StrokeKind::Middle,
             );
 
-            let font = egui::FontId {
-                size: HEIGHT - 1.0,
-                family: FontFamily::Monospace,
-            };
-            let mut display = format!("{} ({})", node.name, node.location.unwrap_or_default());
-            let galley = painter.layout_no_wrap(display.to_string(), font.clone(), Color32::BLACK);
-            let ends_at = galley.size().x;
-            if ends_at > width {
-                display = node.name.to_string();
-                let galley =
-                    painter.layout_no_wrap(display.to_string(), font.clone(), Color32::BLACK);
-                let ends_at = galley.size().x;
-                if ends_at > width {
-                    display = "".to_string();
-                }
-            }
-
-            if !display.is_empty() {
-                painter.text(
+            if width > min_text_size_to_display {
+                let display = format!("{} ({})", node.name, node.location.unwrap_or_default());
+                let wrapping = TextWrapping::truncate_at_width(width - HEIGHT);
+                let mut layout =
+                    LayoutJob::simple_singleline(display, font.clone(), Color32::BLACK);
+                layout.wrap = wrapping;
+                let galley = painter.layout_job(layout);
+                painter.galley(
                     Pos2 {
                         x: base.x + HEIGHT / 2.0,
-                        y: base.y - HEIGHT / 2.0,
+                        y: base.y - HEIGHT,
                     },
-                    Align2::LEFT_CENTER,
-                    display,
-                    font,
+                    galley,
                     Color32::BLACK,
                 );
             }
