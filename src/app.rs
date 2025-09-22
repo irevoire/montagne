@@ -316,7 +316,9 @@ impl<'a> HeapNode<'a> {
             size: HEIGHT - 1.0,
             family: FontFamily::Monospace,
         };
-        let galley = painter.layout_no_wrap("...".to_string(), font.clone(), Color32::BLACK);
+        let visual = ui.visuals();
+        let color = visual.text_color();
+        let galley = painter.layout_no_wrap("...".to_string(), font.clone(), color);
         let min_text_size_to_display = galley.size().x;
 
         let mut explore = vec![DisplayStep {
@@ -339,15 +341,14 @@ impl<'a> HeapNode<'a> {
                 },
                 CornerRadius::same(2),
                 Color32::TRANSPARENT,
-                Stroke::new(1.0, Color32::BLACK),
+                Stroke::new(1.0, color),
                 StrokeKind::Middle,
             );
 
             if width > min_text_size_to_display {
                 let display = format!("{} ({})", node.name, node.location.unwrap_or_default());
                 let wrapping = TextWrapping::truncate_at_width(width - HEIGHT);
-                let mut layout =
-                    LayoutJob::simple_singleline(display, font.clone(), Color32::BLACK);
+                let mut layout = LayoutJob::simple_singleline(display, font.clone(), color);
                 layout.wrap = wrapping;
                 let galley = painter.layout_job(layout);
                 painter.galley(
@@ -356,7 +357,7 @@ impl<'a> HeapNode<'a> {
                         y: base.y - HEIGHT,
                     },
                     galley,
-                    Color32::BLACK,
+                    color,
                 );
             }
             let mut current_x = base.x;
