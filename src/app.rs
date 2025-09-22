@@ -291,11 +291,7 @@ impl<'a> HeapNode<'a> {
                 Some(location.trim_end_matches(')')),
             )
         } else {
-            assert_eq!(
-                remaining,
-                "(heap allocation functions) malloc/new/new[], --alloc-fns, etc."
-            );
-            (None, "malloc/new/new[], --alloc-fns, etc", None)
+            (None, remaining, None)
         };
 
         // Parse children.
