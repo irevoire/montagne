@@ -1,6 +1,7 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontFamily, Layout, PointerButton, Pos2, Rect, Scene, Sense,
-    Stroke, StrokeKind, Ui, Vec2,
+    Color32, CornerRadius, FontFamily, PointerButton, PopupAnchor, Pos2, Rect, RichText, Scene,
+    Sense, Stroke, StrokeKind, TextStyle, Tooltip, Ui, Vec2,
+    emath::RectTransform,
     text::{LayoutJob, TextWrapping},
 };
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
@@ -13,8 +14,15 @@ const DELIM: &str = "#-----------\n";
 pub struct App {
     input: String,
     snapshots: Vec<Snapshot>,
-    opened_snapshots: Vec<(usize, Rect)>,
+    #[serde(default)]
+    opened_snapshots: Vec<Window>,
     plot: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Window {
+    index: usize,
+    scene_rect: Rect,
 }
 
 impl App {
@@ -100,7 +108,10 @@ impl eframe::App for App {
                                 .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
                                 .unwrap();
                             if self.snapshots[pos].heap_tree != HeapTree::Empty {
-                                self.opened_snapshots.push((pos, Rect::ZERO));
+                                self.opened_snapshots.push(Window {
+                                    index: pos,
+                                    scene_rect: Rect::ZERO,
+                                });
                             }
                         }
                         plot_ui.line(line);
@@ -110,8 +121,8 @@ impl eframe::App for App {
             }
         });
         let mut remove_pos = Vec::new();
-        for (pos, (opened_snapshots, scene_rect)) in self.opened_snapshots.iter_mut().enumerate() {
-            let snap = &self.snapshots[*opened_snapshots];
+        for (pos, Window { index, scene_rect }) in self.opened_snapshots.iter_mut().enumerate() {
+            let snap = &self.snapshots[*index];
             let suffix = if matches!(snap.heap_tree, HeapTree::Peak(_)) {
                 " (peak)"
             } else {
@@ -126,7 +137,13 @@ impl eframe::App for App {
                         let scene = Scene::new()
                             .max_inner_size([1920.0, 1080.0])
                             .zoom_range(0.1..=20.0);
-                        scene.show(ui, scene_rect, |ui| heap_node.paint(ui));
+                        let transform = RectTransform::from_to(ui.max_rect(), *scene_rect);
+                        let mouse_pos = ui
+                            .ctx()
+                            .pointer_hover_pos()
+                            .filter(|pos| ui.max_rect().contains(*pos))
+                            .map(|pos| transform.transform_pos(pos));
+                        scene.show(ui, scene_rect, |ui| heap_node.paint(ui, mouse_pos));
                     });
                 });
             if !opened {
@@ -304,7 +321,7 @@ impl<'a> HeapNode<'a> {
         })
     }
 
-    fn paint(&self, ui: &mut Ui) {
+    fn paint(&self, ui: &mut Ui, mouse_pos: Option<Pos2>) {
         const HEIGHT: f32 = 8.0;
 
         let (response, painter) =
@@ -328,22 +345,44 @@ impl<'a> HeapNode<'a> {
         }];
 
         while let Some(DisplayStep { base, width, node }) = explore.pop() {
-            painter.rect(
-                Rect {
-                    min: Pos2 {
-                        x: base.x,
-                        y: base.y - HEIGHT,
-                    },
-                    max: Pos2 {
-                        x: base.x + width,
-                        y: base.y,
-                    },
+            let rect = Rect {
+                min: Pos2 {
+                    x: base.x,
+                    y: base.y - HEIGHT,
                 },
+                max: Pos2 {
+                    x: base.x + width,
+                    y: base.y,
+                },
+            };
+            painter.rect(
+                rect,
                 CornerRadius::same(2),
                 Color32::TRANSPARENT,
                 Stroke::new(1.0, color),
                 StrokeKind::Middle,
             );
+            if let Some(mouse_pos) = mouse_pos
+                && rect.contains(mouse_pos)
+            {
+                Tooltip::always_open(
+                    ui.ctx().clone(),
+                    response.layer_id,
+                    response.id,
+                    PopupAnchor::Pointer,
+                )
+                .show(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(node.name).strong());
+                        if let Some(addr) = node.addr {
+                            ui.label(format!(" {:80x}", addr));
+                        }
+                    });
+                    if let Some(location) = node.location {
+                        ui.label(format!(" ({})", location));
+                    }
+                });
+            }
 
             if width > min_text_size_to_display {
                 let display = format!("{} ({})", node.name, node.location.unwrap_or_default());
