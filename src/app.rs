@@ -1,11 +1,12 @@
 use egui::{
     Color32, CornerRadius, FontFamily, PointerButton, PopupAnchor, Pos2, Rect, RichText, Scene,
-    Sense, Stroke, StrokeKind, TextStyle, Tooltip, Ui, Vec2,
+    Sense, Stroke, StrokeKind, Tooltip, Ui, Vec2,
     emath::RectTransform,
     text::{LayoutJob, TextWrapping},
 };
 use egui_plot::{Line, MarkerShape, Plot, PlotPoints, Points};
 use itertools::Itertools;
+use regex::Regex;
 
 const DELIM: &str = "#-----------\n";
 
@@ -23,6 +24,9 @@ pub struct App {
 struct Window {
     index: usize,
     scene_rect: Rect,
+    filter_string: String,
+    #[serde(skip, default)]
+    filter_regex: Option<Regex>,
 }
 
 impl App {
@@ -111,6 +115,8 @@ impl eframe::App for App {
                                 self.opened_snapshots.push(Window {
                                     index: pos,
                                     scene_rect: Rect::ZERO,
+                                    filter_string: String::new(),
+                                    filter_regex: None,
                                 });
                             }
                         }
@@ -121,7 +127,16 @@ impl eframe::App for App {
             }
         });
         let mut remove_pos = Vec::new();
-        for (pos, Window { index, scene_rect }) in self.opened_snapshots.iter_mut().enumerate() {
+        for (
+            pos,
+            Window {
+                index,
+                scene_rect,
+                filter_string,
+                filter_regex,
+            },
+        ) in self.opened_snapshots.iter_mut().enumerate()
+        {
             let snap = &self.snapshots[*index];
             let suffix = if matches!(snap.heap_tree, HeapTree::Peak(_)) {
                 " (peak)"
@@ -132,6 +147,29 @@ impl eframe::App for App {
             egui::Window::new(format!("{}{suffix}", snap.id))
                 .open(&mut opened)
                 .show(ctx, |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        ui.label("Filter (regex):");
+                        let changed = ui
+                            .text_edit_singleline(filter_string)
+                            .on_hover_ui(|ui| {
+                                ui.label("Will match everything if empty");
+                            })
+                            .changed();
+                        if changed {
+                            let r = if filter_string.is_empty() {
+                                ".*"
+                            } else {
+                                &filter_string
+                            };
+                            match Regex::new(r) {
+                                Ok(regex) => *filter_regex = Some(regex),
+                                Err(e) => {
+                                    ui.colored_label(Color32::RED, e.to_string());
+                                    *filter_regex = Some(Regex::new(".*").unwrap());
+                                }
+                            }
+                        }
+                    });
                     let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
                     let scene = Scene::new()
                         .max_inner_size([1920.0, 1080.0])
@@ -142,7 +180,9 @@ impl eframe::App for App {
                         .pointer_hover_pos()
                         .filter(|pos| ui.max_rect().contains(*pos))
                         .map(|pos| transform.transform_pos(pos));
-                    scene.show(ui, scene_rect, |ui| heap_node.paint(ui, mouse_pos));
+                    scene.show(ui, scene_rect, |ui| {
+                        heap_node.paint(ui, mouse_pos, filter_regex.as_ref())
+                    });
                 });
             if !opened {
                 remove_pos.push(pos);
@@ -319,7 +359,7 @@ impl<'a> HeapNode<'a> {
         })
     }
 
-    fn paint(&self, ui: &mut Ui, mouse_pos: Option<Pos2>) {
+    fn paint(&self, ui: &mut Ui, mouse_pos: Option<Pos2>, filter: Option<&Regex>) {
         const HEIGHT: f32 = 8.0;
 
         let (response, painter) =
@@ -333,6 +373,11 @@ impl<'a> HeapNode<'a> {
         };
         let visual = ui.visuals();
         let color = visual.text_color();
+        let filter_match_bg_color = if visual.dark_mode {
+            Color32::DARK_GREEN
+        } else {
+            Color32::LIGHT_GREEN
+        };
         let galley = painter.layout_no_wrap("...".to_string(), font.clone(), color);
         let min_text_size_to_display = galley.size().x;
 
@@ -343,6 +388,14 @@ impl<'a> HeapNode<'a> {
         }];
 
         while let Some(DisplayStep { base, width, node }) = explore.pop() {
+            let display = format!("{} ({})", node.name, node.location.unwrap_or_default());
+            let background_color = if let Some(regex) = filter
+                && regex.is_match(&display)
+            {
+                filter_match_bg_color
+            } else {
+                Color32::TRANSPARENT
+            };
             let rect = Rect {
                 min: Pos2 {
                     x: base.x,
@@ -356,7 +409,7 @@ impl<'a> HeapNode<'a> {
             painter.rect(
                 rect,
                 CornerRadius::same(2),
-                Color32::TRANSPARENT,
+                background_color,
                 Stroke::new(1.0, color),
                 StrokeKind::Middle,
             );
@@ -383,7 +436,6 @@ impl<'a> HeapNode<'a> {
             }
 
             if width > min_text_size_to_display {
-                let display = format!("{} ({})", node.name, node.location.unwrap_or_default());
                 let wrapping = TextWrapping::truncate_at_width(width - HEIGHT);
                 let mut layout = LayoutJob::simple_singleline(display, font.clone(), color);
                 layout.wrap = wrapping;
