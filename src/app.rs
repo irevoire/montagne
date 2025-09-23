@@ -132,19 +132,17 @@ impl eframe::App for App {
             egui::Window::new(format!("{}{suffix}", snap.id))
                 .open(&mut opened)
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
-                        let scene = Scene::new()
-                            .max_inner_size([1920.0, 1080.0])
-                            .zoom_range(0.1..=20.0);
-                        let transform = RectTransform::from_to(ui.max_rect(), *scene_rect);
-                        let mouse_pos = ui
-                            .ctx()
-                            .pointer_hover_pos()
-                            .filter(|pos| ui.max_rect().contains(*pos))
-                            .map(|pos| transform.transform_pos(pos));
-                        scene.show(ui, scene_rect, |ui| heap_node.paint(ui, mouse_pos));
-                    });
+                    let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
+                    let scene = Scene::new()
+                        .max_inner_size([1920.0, 1080.0])
+                        .zoom_range(0.1..=20.0);
+                    let transform = RectTransform::from_to(ui.max_rect(), *scene_rect);
+                    let mouse_pos = ui
+                        .ctx()
+                        .pointer_hover_pos()
+                        .filter(|pos| ui.max_rect().contains(*pos))
+                        .map(|pos| transform.transform_pos(pos));
+                    scene.show(ui, scene_rect, |ui| heap_node.paint(ui, mouse_pos));
                 });
             if !opened {
                 remove_pos.push(pos);
@@ -375,7 +373,7 @@ impl<'a> HeapNode<'a> {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(node.name).strong());
                         if let Some(addr) = node.addr {
-                            ui.label(format!(" {:80x}", addr));
+                            ui.label(format!(" 0x{:08x}", addr));
                         }
                     });
                     if let Some(location) = node.location {
