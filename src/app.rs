@@ -147,7 +147,7 @@ impl eframe::App for App {
             egui::Window::new(format!("{}{suffix}", snap.id))
                 .open(&mut opened)
                 .show(ctx, |ui| {
-                    egui::MenuBar::new().ui(ui, |ui| {
+                    let response = egui::MenuBar::new().ui(ui, |ui| {
                         ui.label("Filter (regex):");
                         let response = ui.text_edit_singleline(filter_string);
                         if response.changed() {
@@ -172,16 +172,26 @@ impl eframe::App for App {
                             });
                         }
                     });
-                    let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
-                    let scene = Scene::new()
-                        .max_inner_size([1920.0, 1080.0])
-                        .zoom_range(0.1..=20.0);
-                    let transform = RectTransform::from_to(ui.max_rect(), *scene_rect);
+                    let max_rect = ui.max_rect();
+                    let max_size = max_rect.max - max_rect.min;
+                    let scene = Scene::new().max_inner_size(max_size).zoom_range(0.1..=20.0);
+                    let transform = RectTransform::from_to(
+                        Rect {
+                            min: Pos2 {
+                                x: ui.max_rect().min.x,
+                                y: response.response.rect.max.y,
+                            },
+                            max: ui.max_rect().max,
+                        },
+                        *scene_rect,
+                    );
                     let mouse_pos = ui
                         .ctx()
                         .pointer_hover_pos()
                         .filter(|pos| ui.max_rect().contains(*pos))
                         .map(|pos| transform.transform_pos(pos));
+
+                    let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
                     scene.show(ui, scene_rect, |ui| {
                         heap_node.paint(
                             ui,
@@ -366,7 +376,7 @@ impl<'a> HeapNode<'a> {
     }
 
     fn paint(&self, ui: &mut Ui, mouse_pos: Option<Pos2>, filter: Option<&Regex>) {
-        const HEIGHT: f32 = 8.0;
+        const HEIGHT: f32 = 16.0;
 
         let (response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
