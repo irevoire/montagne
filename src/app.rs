@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use egui::{
     Color32, CornerRadius, FontFamily, PointerButton, PopupAnchor, Pos2, Rect, RichText, Scene,
     Sense, Stroke, StrokeKind, Tooltip, Ui, Vec2,
@@ -14,6 +16,7 @@ const DELIM: &str = "#-----------\n";
 #[serde(default)]
 pub struct App {
     input: String,
+    error: String,
     snapshots: Vec<Snapshot>,
     #[serde(default)]
     opened_snapshots: Vec<Window>,
@@ -115,8 +118,18 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if !self.plot {
                 if ui.button("plot").clicked() {
-                    self.plot = true;
-                    self.snapshots = parse(&self.input);
+                    match parse(&self.input) {
+                        Ok(snapshots) => {
+                            self.snapshots = snapshots;
+                            self.plot = true;
+                        }
+                        Err(e) => {
+                            self.error = e.to_string();
+                        }
+                    }
+                }
+                if !self.error.is_empty() {
+                    ui.label(RichText::new(self.error.to_string()).color(Color32::RED));
                 }
                 ui.label("Paste your massif file here: ");
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -218,7 +231,7 @@ impl eframe::App for App {
     }
 }
 
-fn parse(s: &str) -> Vec<Snapshot> {
+fn parse(s: &str) -> Result<Vec<Snapshot>, Cow<'static, str>> {
     // desc: (none)
     // cmd: target/debug/massif
     // time_unit: i
@@ -232,18 +245,27 @@ fn parse(s: &str) -> Vec<Snapshot> {
     // heap_tree=empty
 
     let mut snapshots = Vec::new();
-    let (_metadata, s) = s.split_once(DELIM).expect("a");
+    let (_metadata, s) = s
+        .split_once(DELIM)
+        .ok_or("File is missing the snapshots part")?;
     let snaphot = s.split(DELIM).chunks(2);
     for mut data in &snaphot {
-        let (id, snap) = data.next_tuple().expect("a");
-        log::info!("id={id},snap={snap}");
-        let (key, id) = id.split_once('=').expect("a");
-        assert_eq!(key, "snapshot", "snapshot");
-        log::info!("id={id}");
-        let snap = Snapshot::from_str(snap, id.trim().parse().expect("msg"));
+        let (id, snap) = data.next_tuple().ok_or("Missing snapshot id")?;
+        let (key, id) = id.split_once('=').ok_or("Malformed id")?;
+        if key != "snapshot" {
+            return Err("Invalid key when retrieving snapshot id".into());
+        }
+        let snap = Snapshot::from_str(
+            snap,
+            id.trim().parse().map_err(|e| {
+                format!(
+                    "Could not parse snapshot id, expected a number but instead found `{id:?}`: {e}"
+                )
+            })?,
+        )?;
         snapshots.push(snap);
     }
-    snapshots
+    Ok(snapshots)
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
@@ -272,35 +294,60 @@ impl Snapshot {
     // mem_heap_extra_B=0
     // mem_stacks_B=0
     // heap_tree=empty
-    fn from_str(s: &str, id: usize) -> Self {
-        log::info!("{s:?}");
+    fn from_str(s: &str, id: usize) -> Result<Self, Cow<'static, str>> {
         let mut lines = s.lines();
 
-        let (key, time) = lines.next().expect("a").split_once('=').expect("a");
-        assert_eq!(key, "time", "time");
-        let (key, mem_heap_b) = lines.next().expect("a").split_once('=').expect("a");
-        assert_eq!(key, "mem_heap_B", "mem_heap_B");
-        let (key, mem_heap_extra_b) = lines.next().expect("a").split_once('=').expect("a");
-        assert_eq!(key, "mem_heap_extra_B", "mem_heap_extra_b");
-        let (key, mem_stacks_b) = lines.next().expect("a").split_once('=').expect("a");
-        assert_eq!(key, "mem_stacks_B", "mem_stacks_b");
-        let (key, heap_tree) = lines.next().expect("a").split_once('=').expect("a");
-        assert_eq!(key, "heap_tree", "heap_tree");
+        let time = Self::parse_key_value(&mut lines, id, "time")?;
+        let mem_heap_b = Self::parse_key_value(&mut lines, id, "mem_heap_B")?;
+        let mem_heap_extra_b = Self::parse_key_value(&mut lines, id, "mem_heap_extra_B")?;
+        let mem_stacks_b = Self::parse_key_value(&mut lines, id, "mem_stacks_B")?;
+        let heap_tree = Self::parse_key_value(&mut lines, id, "heap_tree")?;
         let heap_tree = match heap_tree {
             "empty" => HeapTree::Empty,
             "peak" => HeapTree::Peak(lines.collect::<Vec<&str>>().join("\n")),
             "detailed" => HeapTree::Detailed(lines.collect::<Vec<&str>>().join("\n")),
-            other => panic!("Unknown heap tree type {other}"),
+            other => {
+                return Err(format!("Unknown heap tree type `{other}` for snapshot {id}. Expected `empty`, `peak` or `detailed`.").into());
+            }
         };
 
-        Self {
+        Ok(Self {
             id,
-            time: time.parse().expect("a"),
-            mem_heap_b: mem_heap_b.parse().expect("a"),
-            mem_heap_extra_b: mem_heap_extra_b.parse().expect("a"),
-            mem_stacks_b: mem_stacks_b.parse().expect("a"),
+            time: time
+                .parse()
+                .map_err(|e| format!("Could not parse number representing `time`: {e}. Found {time:?}"))?,
+            mem_heap_b: mem_heap_b
+                .parse()
+                .map_err(|e| format!("Could not parse number representing `mem_heap_b`: {e}. Found {mem_heap_b:?}"))?,
+            mem_heap_extra_b: mem_heap_extra_b.parse().map_err(|e| {
+                format!("Could not parse number representing `mem_heap_extra_b`: {e}. Found {mem_heap_extra_b:?}")
+            })?,
+            mem_stacks_b: mem_stacks_b
+                .parse()
+                .map_err(|e| format!("Could not parse number representing `mem_stacks_b`: {e}. Found {mem_stacks_b:?}"))?,
             heap_tree,
+        })
+    }
+
+    fn parse_key_value<'a>(
+        lines: &mut std::str::Lines<'a>,
+        id: usize,
+        expected_key: &str,
+    ) -> Result<&'a str, Cow<'static, str>> {
+        let (key, value) = lines
+            .next()
+            .ok_or(format!("Missing second line for snapshot `{id}`"))?
+            .split_once('=')
+            .ok_or(format!(
+                "Malformed second line `mem_heap_B=X` for snapshot `{id}`"
+            ))?;
+        if key != expected_key {
+            return Err(format!(
+                "Unexpected key for first line, received `{key}` instead of `{expected_key}` for snapshot `{id}`"
+            )
+            .into());
         }
+        Ok(value)
     }
 }
 
