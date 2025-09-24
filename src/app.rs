@@ -383,32 +383,46 @@ struct DisplayStep<'a> {
 }
 
 impl<'a> HeapNode<'a> {
-    fn parse(lines: &mut impl Iterator<Item = &'a str>) -> Option<Self> {
-        let line = lines.next().expect("missing heap node line");
+    fn parse(lines: &mut impl Iterator<Item = &'a str>) -> Result<Option<Self>, Cow<'static, str>> {
+        let line = lines.next().ok_or("missing heap node line")?;
 
         // Parse children count.
-        let (children_count, remaining) = line.split_once(": ").unwrap();
+        let (children_count, remaining) = line
+            .split_once(": ")
+            .ok_or("Malformed stacktrace, missing `: `")?;
         let children_count = children_count
             .strip_prefix('n')
-            .unwrap()
+            .ok_or("Malformed stacktrace, missing prefix `n`")?
             .parse::<usize>()
-            .unwrap();
+            .map_err(|e| {
+                format!("Malformed stacktrace, can't parse n: {e} in {children_count:?}")
+            })?;
 
         // Special case for bellow threshold nodes.
         if children_count == 0 && remaining.contains("all below massif's threshold") {
-            return None;
+            return Ok(None);
         }
 
         // Parse bytes.
         let (bytes, remaining) = remaining.split_once(' ').unwrap();
-        let bytes = bytes.parse().unwrap();
+        let bytes = bytes
+            .parse()
+            .map_err(|e| format!("Malformed stacktrace, can't parse bytes: {e} in `{bytes:?}`"))?;
 
-        // Parse memory address.
+        // Parse memor address.
         let (addr, name, location) = if remaining.starts_with("0x") {
-            let (addr, remaining) = remaining.split_once(": ").unwrap();
-            let (name, location) = remaining.rsplit_once(" (").unwrap();
+            let (addr, remaining) = remaining
+                .split_once(": ")
+                .ok_or("Malformed stacktrace, can't parse addr: Missing `: `")?;
+            let (name, location) = remaining
+                .rsplit_once(" (")
+                .ok_or("Malformed stacktrace, can't parse addr: Missing ` (`")?;
             (
-                Some(usize::from_str_radix(addr.trim_start_matches("0x"), 16).unwrap()),
+                Some(
+                    usize::from_str_radix(addr.trim_start_matches("0x"), 16).map_err(|e| {
+                        format!("Malformed stacktrace, can't parse addr: {e} in {addr:?}")
+                    })?,
+                ),
                 name,
                 Some(location.trim_end_matches(')')),
             )
@@ -418,16 +432,16 @@ impl<'a> HeapNode<'a> {
 
         // Parse children.
         let children = (0..children_count)
-            .filter_map(|_| Self::parse(lines))
-            .collect();
+            .filter_map(|_| Self::parse(lines).transpose())
+            .collect::<Result<_, _>>()?;
 
-        Some(Self {
+        Ok(Some(Self {
             bytes,
             addr,
             name,
             location,
             children,
-        })
+        }))
     }
 
     fn paint(&self, ui: &mut Ui, mouse_pos: Option<Pos2>, filter: Option<&Regex>) {
@@ -556,10 +570,10 @@ impl<'a> HeapNode<'a> {
 }
 
 impl<'a> TryFrom<&'a str> for HeapNode<'a> {
-    type Error = ();
+    type Error = Cow<'static, str>;
 
     fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        Self::parse(&mut value.lines().map(str::trim)).ok_or(())
+        Self::parse(&mut value.lines().map(str::trim))?.ok_or("No heap node".into())
     }
 }
 
