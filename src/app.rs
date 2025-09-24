@@ -26,7 +26,7 @@ struct Window {
     scene_rect: Rect,
     filter_string: String,
     #[serde(skip, default)]
-    filter_regex: Option<Regex>,
+    filter_regex: Option<Result<Regex, regex::Error>>,
 }
 
 impl App {
@@ -149,25 +149,27 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.label("Filter (regex):");
-                        let changed = ui
-                            .text_edit_singleline(filter_string)
-                            .on_hover_ui(|ui| {
-                                ui.label("Will match everything if empty");
-                            })
-                            .changed();
-                        if changed {
-                            let r = if filter_string.is_empty() {
-                                ".*"
+                        let response = ui.text_edit_singleline(filter_string);
+                        if response.changed() {
+                            if filter_string.is_empty() {
+                                *filter_regex = None;
                             } else {
-                                &filter_string
-                            };
-                            match Regex::new(r) {
-                                Ok(regex) => *filter_regex = Some(regex),
-                                Err(e) => {
-                                    ui.colored_label(Color32::RED, e.to_string());
-                                    *filter_regex = Some(Regex::new(".*").unwrap());
-                                }
+                                *filter_regex = Some(Regex::new(filter_string));
                             }
+                        }
+
+                        if let Some(Err(e)) = filter_regex {
+                            Tooltip::always_open(
+                                ui.ctx().clone(),
+                                response.layer_id,
+                                response.id,
+                                PopupAnchor::ParentRect(response.rect),
+                            )
+                            .show(|ui| {
+                                ui.label(
+                                    RichText::new(e.to_string()).monospace().color(Color32::RED),
+                                );
+                            });
                         }
                     });
                     let heap_node = HeapNode::try_from(snap.heap_tree.unwrap()).unwrap();
@@ -181,7 +183,11 @@ impl eframe::App for App {
                         .filter(|pos| ui.max_rect().contains(*pos))
                         .map(|pos| transform.transform_pos(pos));
                     scene.show(ui, scene_rect, |ui| {
-                        heap_node.paint(ui, mouse_pos, filter_regex.as_ref())
+                        heap_node.paint(
+                            ui,
+                            mouse_pos,
+                            filter_regex.as_ref().map(|n| n.as_ref().ok()).flatten(),
+                        )
                     });
                 });
             if !opened {
