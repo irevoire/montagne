@@ -37,6 +37,67 @@ impl App {
             Default::default()
         }
     }
+
+    fn plot_snapshots(&mut self, ui: &mut Ui) {
+        let points: PlotPoints<'_> = self
+            .snapshots
+            .iter()
+            .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
+            .collect();
+        let peaks: PlotPoints<'_> = self
+            .snapshots
+            .iter()
+            .filter(|snap| matches!(snap.heap_tree, HeapTree::Peak(_)))
+            .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
+            .collect();
+        let peaks = Points::new("peak", peaks)
+            .shape(MarkerShape::Diamond)
+            .radius(10.0);
+        let detailed: PlotPoints<'_> = self
+            .snapshots
+            .iter()
+            .filter(|snap| matches!(snap.heap_tree, HeapTree::Detailed(_)))
+            .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
+            .collect();
+        let detailed = Points::new("detailed", detailed)
+            .shape(MarkerShape::Cross)
+            .radius(10.0);
+        let line = Line::new("mem_heap_b", points);
+        Plot::new("my_plot")
+            .x_axis_label("i")
+            .y_axis_formatter(|mark, _range| {
+                if mark.value.is_sign_positive() {
+                    bity::byte::format(mark.value as u64)
+                } else {
+                    format!("-{}", bity::byte::format((-mark.value) as u64))
+                }
+            })
+            .view_aspect(2.0)
+            .show(ui, |plot_ui| {
+                if plot_ui.response().clicked_by(PointerButton::Primary)
+                    && let Some(pos) = plot_ui.pointer_coordinate()
+                {
+                    let (pos, _snap) = self
+                        .snapshots
+                        .iter()
+                        .enumerate()
+                        .filter(|snap| !matches!(snap.1.heap_tree, HeapTree::Empty))
+                        .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
+                        .unwrap();
+                    if self.snapshots[pos].heap_tree != HeapTree::Empty {
+                        self.opened_snapshots.push(Window {
+                            index: pos,
+                            scene_rect: Rect::ZERO,
+                            filter_string: String::new(),
+                            filter_regex: None,
+                        });
+                    }
+                }
+                plot_ui.line(line);
+                plot_ui.points(peaks);
+                plot_ui.points(detailed);
+            });
+    }
 }
 
 impl eframe::App for App {
@@ -59,71 +120,18 @@ impl eframe::App for App {
                 }
                 ui.label("Paste your massif file here: ");
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.text_edit_multiline(&mut self.input);
+                    ui.add_sized(
+                        ui.available_size(),
+                        egui::TextEdit::multiline(&mut self.input),
+                    );
                 });
             } else {
-                if ui.button("reset").clicked() {
+                if ui.button("edit massif file").clicked() {
                     self.plot = false;
                     self.opened_snapshots.clear();
                 }
-                let points: PlotPoints<'_> = self
-                    .snapshots
-                    .iter()
-                    .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
-                    .collect();
-                let peaks: PlotPoints<'_> = self
-                    .snapshots
-                    .iter()
-                    .filter(|snap| matches!(snap.heap_tree, HeapTree::Peak(_)))
-                    .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
-                    .collect();
-                let peaks = Points::new("peak", peaks)
-                    .shape(MarkerShape::Diamond)
-                    .radius(10.0);
-                let detailed: PlotPoints<'_> = self
-                    .snapshots
-                    .iter()
-                    .filter(|snap| matches!(snap.heap_tree, HeapTree::Detailed(_)))
-                    .map(|snap| [snap.id as f64, snap.mem_heap_b as f64])
-                    .collect();
-                let detailed = Points::new("detailed", detailed)
-                    .shape(MarkerShape::Cross)
-                    .radius(10.0);
-                let line = Line::new("mem_heap_b", points);
-                Plot::new("my_plot")
-                    .x_axis_label("i")
-                    .y_axis_formatter(|mark, _range| {
-                        if mark.value.is_sign_positive() {
-                            bity::byte::format(mark.value as u64)
-                        } else {
-                            format!("-{}", bity::byte::format((-mark.value) as u64))
-                        }
-                    })
-                    .view_aspect(2.0)
-                    .show(ui, |plot_ui| {
-                        if plot_ui.response().clicked_by(PointerButton::Primary)
-                            && let Some(pos) = plot_ui.pointer_coordinate()
-                        {
-                            let (pos, _snap) = self
-                                .snapshots
-                                .iter()
-                                .enumerate()
-                                .filter(|snap| !matches!(snap.1.heap_tree, HeapTree::Empty))
-                                .min_by_key(|snap| snap.1.id.abs_diff(pos.x as usize))
-                                .unwrap();
-                            if self.snapshots[pos].heap_tree != HeapTree::Empty {
-                                self.opened_snapshots.push(Window {
-                                    index: pos,
-                                    scene_rect: Rect::ZERO,
-                                    filter_string: String::new(),
-                                    filter_regex: None,
-                                });
-                            }
-                        }
-                        plot_ui.line(line);
-                        plot_ui.points(peaks);
-                        plot_ui.points(detailed);
-                    });
+                ui.separator();
+                self.plot_snapshots(ui);
             }
         });
         let mut remove_pos = Vec::new();
